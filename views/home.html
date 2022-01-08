@@ -1,0 +1,890 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Maceng API</title> 
+<meta property="og:image" content="https://i.ibb.co/80x9bJ1/logo2.png" /> 
+<meta property="og:title" content="Maceng APIs" /> <meta property="og:description" content="FREE ReST API UNTUK BOT WHATSAPP"/> 
+<link rel="shortcut icon" href="https://i.ibb.co/80x9bJ1/logo2.png" type="image/x-icon" />
+</head>
+<script>
+var snowStorm = null;
+function SnowStorm() {
+  this.flakesMax = 128;           // Limit total amount of snow made (falling + sticking)
+  this.flakesMaxActive = 64;      // Limit amount of snow falling at once (less = lower CPU use)
+  this.animationInterval = 33;    // Theoretical "miliseconds per frame" measurement. 20 = fast + smooth, but high CPU use. 50 = more conservative, but slower
+  this.flakeBottom = null;        // Integer for Y axis snow limit, 0 or null for "full-screen" snow effect
+  this.targetElement = null;      // element which snow will be appended to (document body if null/undefined) - can be an element ID string, or a DOM node reference
+  this.followMouse = true;        // Snow will change movement with the user's mouse
+  this.snowColor = '#fff';        // Don't eat (or use?) yellow snow.
+  this.snowCharacter = '&bull;';  // &bull; = bullet, &middot; is square on some systems etc.
+  this.snowStick = true;          // Whether or not snow should "stick" at the bottom. When off, will never collect.
+  this.useMeltEffect = true;      // When recycling fallen snow (or rarely, when falling), have it "melt" and fade out if browser supports it
+  this.useTwinkleEffect = false;  // Allow snow to randomly "flicker" in and out of view while falling
+  this.usePositionFixed = false;  // true = snow not affected by window scroll. may increase CPU load, disabled by default - if enabled, used only where supported
+
+  this.flakeLeftOffset = 0;       // amount to subtract from edges of container
+  this.flakeRightOffset = 0;      // amount to subtract from edges of container
+  this.flakeWidth = 8;            // max pixel width for snow element
+  this.flakeHeight = 8;           // max pixel height for snow element
+  this.vMaxX = 5;                 // Maximum X velocity range for snow
+  this.vMaxY = 4;                 // Maximum Y velocity range
+  this.zIndex = 0;                // CSS stacking order applied to each snowflake
+
+  var addEvent = (typeof(window.attachEvent)=='undefined'?function(o,evtName,evtHandler) {
+	return o.addEventListener(evtName,evtHandler,false);
+  }:function(o,evtName,evtHandler) {
+	return o.attachEvent('on'+evtName,evtHandler);
+  });
+
+  var removeEvent = (typeof(window.attachEvent)=='undefined'?function(o,evtName,evtHandler) {
+    return o.removeEventListener(evtName,evtHandler,false);
+  }:function(o,evtName,evtHandler) {
+	return o.detachEvent('on'+evtName,evtHandler);
+  });
+
+  function rnd(n,min) {
+    if (isNaN(min)) {
+	  min = 0;
+	}
+    return (Math.random()*n)+min;
+  }
+
+  function plusMinus(n) {
+    return (parseInt(rnd(2),10)==1?n*-1:n);
+  }
+
+  var s = this;
+  var storm = this;
+  this.timers = [];
+  this.flakes = [];
+  this.disabled = false;
+  this.active = false;
+
+  var isIE = navigator.userAgent.match(/msie/i);
+  var isIE6 = navigator.userAgent.match(/msie 6/i);
+  var isOldIE = (isIE && (isIE6 || navigator.userAgent.match(/msie 5/i)));
+  var isWin9X = navigator.appVersion.match(/windows 98/i);
+  var isiPhone = navigator.userAgent.match(/iphone/i);
+  var isBackCompatIE = (isIE && document.compatMode == 'BackCompat');
+  var noFixed = ((isBackCompatIE || isIE6 || isiPhone)?true:false);
+  var screenX = null;
+  var screenX2 = null;
+  var screenY = null;
+  var scrollY = null;
+  var vRndX = null;
+  var vRndY = null;
+  var windOffset = 1;
+  var windMultiplier = 2;
+  var flakeTypes = 6;
+  var fixedForEverything = false;
+  var opacitySupported = (function(){
+    try {
+	  document.createElement('div').style.opacity = '0.5';
+    } catch (e) {
+	  return false;
+    }
+    return true;
+  })();
+  var docFrag = document.createDocumentFragment();
+  if (s.flakeLeftOffset === null) {
+	s.flakeLeftOffset = 0;
+  }
+  if (s.flakeRightOffset === null) {
+	s.flakeRightOffset = 0;
+  }
+
+  this.meltFrameCount = 20;
+  this.meltFrames = [];
+  for (var i=0; i<this.meltFrameCount; i++) {
+	this.meltFrames.push(1-(i/this.meltFrameCount));
+  }
+
+  this.randomizeWind = function() {
+    vRndX = plusMinus(rnd(s.vMaxX,0.2));
+    vRndY = rnd(s.vMaxY,0.2);
+    if (this.flakes) {
+      for (var i=0; i<this.flakes.length; i++) {
+        if (this.flakes[i].active) {
+          this.flakes[i].setVelocities();
+		}
+      }
+    }
+  };
+
+  this.scrollHandler = function() {
+    // "attach" snowflakes to bottom of window if no absolute bottom value was given
+    scrollY = (s.flakeBottom?0:parseInt(window.scrollY||document.documentElement.scrollTop||document.body.scrollTop,10));
+    if (isNaN(scrollY)) {
+	  scrollY = 0; // Netscape 6 scroll fix
+	}
+    if (!fixedForEverything && !s.flakeBottom && s.flakes) {
+      for (var i=s.flakes.length; i--;) {
+        if (s.flakes[i].active === 0) {
+	      s.flakes[i].stick();
+		}
+      }
+    }
+  };
+
+  this.resizeHandler = function() {
+    if (window.innerWidth || window.innerHeight) {
+      screenX = window.innerWidth-(!isIE?16:2)-s.flakeRightOffset;
+      screenY = (s.flakeBottom?s.flakeBottom:window.innerHeight);
+    } else {
+      screenX = (document.documentElement.clientWidth||document.body.clientWidth||document.body.scrollWidth)-(!isIE?8:0)-s.flakeRightOffset;
+      screenY = s.flakeBottom?s.flakeBottom:(document.documentElement.clientHeight||document.body.clientHeight||document.body.scrollHeight);
+    }
+    screenX2 = parseInt(screenX/2,10);
+  };
+
+  this.resizeHandlerAlt = function() {
+    screenX = s.targetElement.offsetLeft+s.targetElement.offsetWidth-s.flakeRightOffset;
+    screenY = s.flakeBottom?s.flakeBottom:s.targetElement.offsetTop+s.targetElement.offsetHeight;
+    screenX2 = parseInt(screenX/2,10);
+  };
+
+  this.freeze = function() {
+    // pause animation
+    if (!s.disabled) {
+      s.disabled = 1;
+    } else {
+      return false;
+    }
+    for (var i=s.timers.length; i--;) {
+      clearInterval(s.timers[i]);
+    }
+  };
+
+  this.resume = function() {
+    if (s.disabled) {
+       s.disabled = 0;
+    } else {
+      return false;
+    }
+    s.timerInit();
+  };
+
+  this.toggleSnow = function() {
+    if (!s.flakes.length) {
+      // first run
+      s.start();
+    } else {
+      s.active = !s.active;
+      if (s.active) {
+        s.show();
+        s.resume();
+      } else {
+        s.stop();
+        s.freeze();
+      }
+    }
+  };
+
+  this.stop = function() {
+    this.freeze();
+    for (var i=this.flakes.length; i--;) {
+      this.flakes[i].o.style.display = 'none';
+    }
+    removeEvent(window,'scroll',s.scrollHandler);
+    removeEvent(window,'resize',s.resizeHandler);
+    if (!isOldIE) {
+      removeEvent(window,'blur',s.freeze);
+      removeEvent(window,'focus',s.resume);
+    }
+  };
+
+  this.show = function() {
+    for (var i=this.flakes.length; i--;) {
+      this.flakes[i].o.style.display = 'block';
+    }
+  };
+
+  this.SnowFlake = function(parent,type,x,y) {
+    var s = this;
+    var storm = parent;
+    this.type = type;
+    this.x = x||parseInt(rnd(screenX-20),10);
+    this.y = (!isNaN(y)?y:-rnd(screenY)-12);
+    this.vX = null;
+    this.vY = null;
+    this.vAmpTypes = [1,1.2,1.4,1.6,1.8]; // "amplification" for vX/vY (based on flake size/type)
+    this.vAmp = this.vAmpTypes[this.type];
+    this.melting = false;
+    this.meltFrameCount = storm.meltFrameCount;
+    this.meltFrames = storm.meltFrames;
+    this.meltFrame = 0;
+    this.twinkleFrame = 0;
+    this.active = 1;
+    this.fontSize = (10+(this.type/5)*10);
+    this.o = document.createElement('div');
+    this.o.innerHTML = storm.snowCharacter;
+    this.o.style.color = storm.snowColor;
+    this.o.style.position = (fixedForEverything?'fixed':'absolute');
+    this.o.style.width = storm.flakeWidth+'px';
+    this.o.style.height = storm.flakeHeight+'px';
+    this.o.style.fontFamily = 'arial,verdana';
+    this.o.style.overflow = 'hidden';
+    this.o.style.fontWeight = 'normal';
+    this.o.style.zIndex = storm.zIndex;
+    docFrag.appendChild(this.o);
+
+    this.refresh = function() {
+	  if (isNaN(s.x) || isNaN(s.y)) {
+		// safety check
+		return false;
+	  }
+      s.o.style.left = s.x+'px';
+      s.o.style.top = s.y+'px';
+    };
+
+    this.stick = function() {
+      if (noFixed || (storm.targetElement != document.documentElement && storm.targetElement != document.body)) {
+        s.o.style.top = (screenY+scrollY-storm.flakeHeight)+'px';
+      } else if (storm.flakeBottom) {
+	    s.o.style.top = storm.flakeBottom+'px';
+	  } else {
+        s.o.style.display = 'none';
+	    s.o.style.top = 'auto';
+        s.o.style.bottom = '0px';
+	    s.o.style.position = 'fixed';
+        s.o.style.display = 'block';
+      }
+    };
+
+    this.vCheck = function() {
+      if (s.vX>=0 && s.vX<0.2) {
+        s.vX = 0.2;
+      } else if (s.vX<0 && s.vX>-0.2) {
+        s.vX = -0.2;
+      }
+      if (s.vY>=0 && s.vY<0.2) {
+        s.vY = 0.2;
+      }
+    };
+
+    this.move = function() {
+      var vX = s.vX*windOffset;
+      s.x += vX;
+      s.y += (s.vY*s.vAmp);
+      if (s.x >= screenX || screenX-s.x < storm.flakeWidth) { // X-axis scroll check
+        s.x = 0;
+      } else if (vX < 0 && s.x-storm.flakeLeftOffset<0-storm.flakeWidth) {
+        s.x = screenX-storm.flakeWidth-1; // flakeWidth;
+      }
+      s.refresh();
+      var yDiff = screenY+scrollY-s.y;
+      if (yDiff<storm.flakeHeight) {
+        s.active = 0;
+	    if (storm.snowStick) {
+          s.stick();
+	    } else {
+	      s.recycle();
+	    }
+      } else {
+	    if (storm.useMeltEffect && s.active && s.type < 3 && !s.melting && Math.random()>0.998) {
+	      // ~1/1000 chance of melting mid-air, with each frame
+	      s.melting = true;
+	      s.melt();
+	      // only incrementally melt one frame
+	      // s.melting = false;
+	    }
+	    if (storm.useTwinkleEffect) {
+		  if (!s.twinkleFrame) {
+			if (Math.random()>0.9) {
+		      s.twinkleFrame = parseInt(Math.random()*20,10);
+		    }
+		  } else {
+			s.twinkleFrame--;
+			s.o.style.visibility = (s.twinkleFrame && s.twinkleFrame%2===0?'hidden':'visible');
+		  }
+	    }
+      }
+    };
+
+    this.animate = function() {
+      // main animation loop
+      // move, check status, die etc.
+      s.move();
+    };
+
+    this.setVelocities = function() {
+      s.vX = vRndX+rnd(storm.vMaxX*0.12,0.1);
+      s.vY = vRndY+rnd(storm.vMaxY*0.12,0.1);
+    };
+
+	this.setOpacity = function(o,opacity) {
+	  if (!opacitySupported) {
+		return false;
+	  }
+	  o.style.opacity = opacity;
+	};
+
+    this.melt = function() {
+	  if (!storm.useMeltEffect || !s.melting) {
+		s.recycle();
+	  } else {
+		if (s.meltFrame < s.meltFrameCount) {
+		  s.meltFrame++;
+		  s.setOpacity(s.o,s.meltFrames[s.meltFrame]);
+		  s.o.style.fontSize = s.fontSize-(s.fontSize*(s.meltFrame/s.meltFrameCount))+'px';
+		  s.o.style.lineHeight = storm.flakeHeight+2+(storm.flakeHeight*0.75*(s.meltFrame/s.meltFrameCount))+'px';
+		} else {
+		  s.recycle();
+		}
+	  }
+    };
+
+    this.recycle = function() {
+      s.o.style.display = 'none';
+      s.o.style.position = (fixedForEverything?'fixed':'absolute');
+      s.o.style.bottom = 'auto';
+      s.setVelocities();
+      s.vCheck();
+	  s.meltFrame = 0;
+	  s.melting = false;
+	  s.setOpacity(s.o,1);
+	  s.o.style.padding = '0px';
+	  s.o.style.margin = '0px';
+	  s.o.style.fontSize = s.fontSize+'px';
+	  s.o.style.lineHeight = (storm.flakeHeight+2)+'px';
+	  s.o.style.textAlign = 'center';
+	  s.o.style.verticalAlign = 'baseline';
+      s.x = parseInt(rnd(screenX-storm.flakeWidth-20),10);
+      s.y = parseInt(rnd(screenY)*-1,10)-storm.flakeHeight;
+      s.refresh();
+      s.o.style.display = 'block';
+      s.active = 1;
+    };
+
+    this.recycle(); // set up x/y coords etc.
+    this.refresh();
+
+  };
+
+  this.snow = function() {
+    var active = 0;
+    var used = 0;
+    var waiting = 0;
+    var flake = null;
+    for (var i=s.flakes.length; i--;) {
+      if (s.flakes[i].active == 1) {
+        s.flakes[i].move();
+        active++;
+      } else if (s.flakes[i].active === 0) {
+        used++;
+      } else {
+        waiting++;
+      }
+      if (s.flakes[i].melting) {
+	    s.flakes[i].melt();
+	  }
+    }
+    if (active<s.flakesMaxActive) {
+      flake = s.flakes[parseInt(rnd(s.flakes.length),10)];
+      if (flake.active === 0) {
+        flake.melting = true;
+      }
+    }
+  };
+
+  this.mouseMove = function(e) {
+    if (!s.followMouse) {
+	  return true;
+	}
+    var x = parseInt(e.clientX,10);
+    if (x<screenX2) {
+      windOffset = -windMultiplier+(x/screenX2*windMultiplier);
+    } else {
+      x -= screenX2;
+      windOffset = (x/screenX2)*windMultiplier;
+    }
+  };
+
+  this.createSnow = function(limit,allowInactive) {
+    for (var i=0; i<limit; i++) {
+      s.flakes[s.flakes.length] = new s.SnowFlake(s,parseInt(rnd(flakeTypes),10));
+      if (allowInactive || i>s.flakesMaxActive) {
+	    s.flakes[s.flakes.length-1].active = -1;
+	  }
+    }
+    storm.targetElement.appendChild(docFrag);
+  };
+
+  this.timerInit = function() {
+    s.timers = (!isWin9X?[setInterval(s.snow,s.animationInterval)]:[setInterval(s.snow,s.animationInterval*3),setInterval(s.snow,s.animationInterval)]);
+  };
+
+  this.init = function() {
+    s.randomizeWind();
+    s.createSnow(s.flakesMax); // create initial batch
+    addEvent(window,'resize',s.resizeHandler);
+    addEvent(window,'scroll',s.scrollHandler);
+    if (!isOldIE) {
+      addEvent(window,'blur',s.freeze);
+      addEvent(window,'focus',s.resume);
+    }
+    s.resizeHandler();
+    s.scrollHandler();
+    if (s.followMouse) {
+      addEvent(document,'mousemove',s.mouseMove);
+    }
+    s.animationInterval = Math.max(20,s.animationInterval);
+    s.timerInit();
+  };
+
+  var didInit = false;
+
+  this.start = function(bFromOnLoad) {
+	if (!didInit) {
+	  didInit = true;
+	} else if (bFromOnLoad) {
+	  // already loaded and running
+	  return true;
+	}
+    if (typeof s.targetElement == 'string') {
+	  var targetID = s.targetElement;
+      s.targetElement = document.getElementById(targetID);
+      if (!s.targetElement) {
+	    throw new Error('Snowstorm: Unable to get targetElement "'+targetID+'"');
+	  }
+    }
+	if (!s.targetElement) {
+	  s.targetElement = (!isIE?(document.documentElement?document.documentElement:document.body):document.body);
+	}
+    if (s.targetElement != document.documentElement && s.targetElement != document.body) {
+	  s.resizeHandler = s.resizeHandlerAlt; // re-map handler to get element instead of screen dimensions
+	}
+    s.resizeHandler(); // get bounding box elements
+    s.usePositionFixed = (s.usePositionFixed && !noFixed); // whether or not position:fixed is supported
+    fixedForEverything = s.usePositionFixed;
+    if (screenX && screenY && !s.disabled) {
+      s.init();
+      s.active = true;
+    }
+  };
+
+  function doStart() {
+	  s.start(true);
+  }
+
+  if (document.addEventListener) {
+    // safari 3.0.4 doesn't do DOMContentLoaded, maybe others - use a fallback to be safe.
+    document.addEventListener('DOMContentLoaded',doStart,false);
+    window.addEventListener('load',doStart,false);
+  } else {
+    addEvent(window,'load',doStart);
+  }
+
+}
+
+snowStorm = new SnowStorm();
+</script>
+<body>
+  <div class="container">
+    <audio autoplay="false" src="https://h.top4top.io/m_21999zqql1.mp3"></audio>
+    <div class="sp-container">
+      <div class="sp-content">
+        <div class="sp-globe"></div>
+        <h2 class="frame-1">3</h2>
+        <h2 class="frame-2">2</h2>
+        <h2 class="frame-3">1</h2>
+        <h2 class="frame-4">Start</h2>
+        <h2 class="frame-5">
+          <span>Maceng</span>
+          <span>in</span>
+          <span>the Sky</span>
+        </h2>
+        <a class="sp-circle-link" href="/api">Docs</a>
+      </div>
+    </div>
+
+  <style>
+    @import url(https://fonts.googleapis.com/css?family=Open+Sans:400,700);
+    @import url('https://fonts.googleapis.com/css?family=Barlow');
+    body {
+      background: #000000 url(https://i.ibb.co/sjph9pd/Sword-Art-Online-Pict-1.png) no-repeat center center fixed;
+      -webkit-background-size: cover;
+      -moz-background-size: cover;
+      -o-background-size: cover;
+      background-size: cover;
+      font-family: 'Barlow', sans-serif;
+      margin: 0;
+      padding: 0;
+      position: relative;
+      line-height: normal;
+    }
+
+    a,
+    a:visited {
+      color: #555;
+      outline: none;
+      text-decoration: none;
+    }
+
+    a:hover,
+    a:focus,
+    a:visited:hover {
+      color: #ffffff00;
+      text-decoration: none;
+    }
+
+    .container {
+      width: 100%;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    a {
+      text-decoration: none;
+    }
+    
+    h1.main,
+    p.demos {
+      -webkit-animation-delay: 18s;
+      -moz-animation-delay: 18s;
+      -ms-animation-delay: 18s;
+      animation-delay: 18s;
+    }
+    
+    .sp-container {
+      position: fixed;
+      top: 0px;
+      left: 0px;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      background: -webkit-radial-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3) 35%, rgba(0, 0, 0, 0.7));
+      background: -moz-radial-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3) 35%, rgba(0, 0, 0, 0.7));
+      background: -ms-radial-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3) 35%, rgba(0, 0, 0, 0.7));
+      background: radial-gradient(rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0.3) 35%, rgba(0, 0, 0, 0.7));
+    }
+    
+    .sp-content {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      left: 0px;
+      top: 0px;
+      z-index: 1000;
+    }
+    
+    .sp-container h2 {
+      position: absolute;
+      top: 50%;
+      line-height: 100px;
+      height: 90px;
+      margin-top: -50px;
+      font-size: 90px;
+      width: 100%;
+      text-align: center;
+      color: transparent;
+      -webkit-animation: blurFadeInOut 3s ease-in backwards;
+      -moz-animation: blurFadeInOut 3s ease-in backwards;
+      -ms-animation: blurFadeInOut 3s ease-in backwards;
+      animation: blurFadeInOut 3s ease-in backwards;
+    }
+    
+    .sp-container h2.frame-1 {
+      -webkit-animation-delay: 0s;
+      -moz-animation-delay: 0s;
+      -ms-animation-delay: 0s;
+      animation-delay: 0s;
+ 
+    }
+    
+    .sp-container h2.frame-2 {
+      -webkit-animation-delay: 3s;
+      -moz-animation-delay: 3s;
+      -ms-animation-delay: 3s;
+      animation-delay: 3s;
+    }
+    
+    .sp-container h2.frame-3 {
+      -webkit-animation-delay: 6s;
+      -moz-animation-delay: 6s;
+      -ms-animation-delay: 6s;
+      animation-delay: 6s;
+    }
+    
+    .sp-container h2.frame-4 {
+      font-size: 200px;
+      -webkit-animation-delay: 9s;
+      -moz-animation-delay: 9s;
+      -ms-animation-delay: 9s;
+      animation-delay: 9s;
+    }
+    
+    .sp-container h2.frame-5 {
+      -webkit-animation: none;
+      -moz-animation: none;
+      -ms-animation: none;
+      animation: none;
+      color: transparent;
+      text-shadow: 0px 0px 1px #fff;
+    }
+    
+    .sp-container h2.frame-5 span {
+      -webkit-animation: blurFadeIn 3s ease-in 12s backwards;
+      -moz-animation: blurFadeIn 1s ease-in 12s backwards;
+      -ms-animation: blurFadeIn 3s ease-in 12s backwards;
+      animation: blurFadeIn 3s ease-in 12s backwards;
+      color: transparent;
+      text-shadow: 0px 0px 1px #fff;
+    }
+    
+    .sp-container h2.frame-5 span:nth-child(2) {
+      -webkit-animation-delay: 13s;
+      -moz-animation-delay: 13s;
+      -ms-animation-delay: 13s;
+      animation-delay: 13s;
+    }
+    
+    .sp-container h2.frame-5 span:nth-child(3) {
+      -webkit-animation-delay: 14s;
+      -moz-animation-delay: 14s;
+      -ms-animation-delay: 14s;
+      animation-delay: 14s;
+    }
+    
+    .sp-globe {
+      position: absolute;
+      width: 282px;
+      height: 273px;
+      left: 50%;
+      top: 50%;
+      margin: -137px 0 0 -141px;
+      background: transparent url(http://web-sonick.zz.mu/images/sl/globe.png) no-repeat top left;
+      -webkit-animation: fadeInBack 3.6s linear 14s backwards;
+      -moz-animation: fadeInBack 3.6s linear 14s backwards;
+      -ms-animation: fadeInBack 3.6s linear 14s backwards;
+      animation: fadeInBack 3.6s linear 14s backwards;
+      -ms-filter: "progid:DXImageTransform.Microsoft.Alpha(Opacity=30)";
+      filter: alpha(opacity=30);
+      opacity: 0.3;
+      -webkit-transform: scale(5);
+      -moz-transform: scale(5);
+      -o-transform: scale(5);
+      -ms-transform: scale(5);
+      transform: scale(5);
+    }
+    
+    .sp-circle-link {
+      position: absolute;
+      left: 50%;
+      bottom: 100px;
+      margin-left: -50px;
+      text-align: center;
+      line-height: 100px;
+      width: 100px;
+      height: 100px;
+      background: rgb(255, 255, 255);
+      color: #000000;
+      font-size: 25px;
+      -webkit-border-radius: 50%;
+      -moz-border-radius: 50%;
+      border-radius: 50%;
+      -webkit-animation: fadeInRotate 1s linear 16s backwards;
+      -moz-animation: fadeInRotate 1s linear 16s backwards;
+      -ms-animation: fadeInRotate 1s linear 16s backwards;
+      animation: fadeInRotate 1s linear 16s backwards;
+      -webkit-transform: scale(1) rotate(0deg);
+      -moz-transform: scale(1) rotate(0deg);
+      -o-transform: scale(1) rotate(0deg);
+      -ms-transform: scale(1) rotate(0deg);
+      transform: scale(1) rotate(0deg);
+    }
+    
+    .sp-circle-link:hover {
+      background: #ffffff8a;
+      color: rgb(0, 0, 0)
+    }
+    /**/
+    
+    @-webkit-keyframes blurFadeInOut {
+      0% {
+        opacity: 0;
+        text-shadow: 0px 0px 40px #fff;
+        -webkit-transform: scale(1.3);
+      }
+      20%,
+      75% {
+        opacity: 1;
+        text-shadow: 0px 0px 1px #fff;
+        -webkit-transform: scale(1);
+      }
+      100% {
+        opacity: 0;
+        text-shadow: 0px 0px 50px #fff;
+        -webkit-transform: scale(0);
+      }
+    }
+    
+    @-webkit-keyframes blurFadeIn {
+      0% {
+        opacity: 0;
+        text-shadow: 0px 0px 40px #fff;
+        -webkit-transform: scale(1.3);
+      }
+      50% {
+        opacity: 0.5;
+        text-shadow: 0px 0px 10px #fff;
+        -webkit-transform: scale(1.1);
+      }
+      100% {
+        opacity: 1;
+        text-shadow: 0px 0px 1px #fff;
+        -webkit-transform: scale(1);
+      }
+    }
+    
+    @-webkit-keyframes fadeInBack {
+      0% {
+        opacity: 0;
+        -webkit-transform: scale(0);
+      }
+      50% {
+        opacity: 0.4;
+        -webkit-transform: scale(2);
+      }
+      100% {
+        opacity: 0.2;
+        -webkit-transform: scale(5);
+      }
+    }
+    
+    @-webkit-keyframes fadeInRotate {
+      0% {
+        opacity: 0;
+        -webkit-transform: scale(0) rotate(360deg);
+      }
+      100% {
+        opacity: 1;
+        -webkit-transform: scale(1) rotate(0deg);
+      }
+    }
+    /**/
+    
+    @-moz-keyframes blurFadeInOut {
+      0% {
+        opacity: 0;
+        text-shadow: 0px 0px 40px #fff;
+        -moz-transform: scale(1.3);
+      }
+      20%,
+      75% {
+        opacity: 1;
+        text-shadow: 0px 0px 1px #fff;
+        -moz-transform: scale(1);
+      }
+      100% {
+        opacity: 0;
+        text-shadow: 0px 0px 50px #fff;
+        -moz-transform: scale(0);
+      }
+    }
+    
+    @-moz-keyframes blurFadeIn {
+      0% {
+        opacity: 0;
+        text-shadow: 0px 0px 40px #fff;
+        -moz-transform: scale(1.3);
+      }
+      100% {
+        opacity: 1;
+        text-shadow: 0px 0px 1px #fff;
+        -moz-transform: scale(1);
+      }
+    }
+    
+    @-moz-keyframes fadeInBack {
+      0% {
+        opacity: 0;
+        -moz-transform: scale(0);
+      }
+      50% {
+        opacity: 0.4;
+        -moz-transform: scale(2);
+      }
+      100% {
+        opacity: 0.2;
+        -moz-transform: scale(5);
+      }
+    }
+    
+    @-moz-keyframes fadeInRotate {
+      0% {
+        opacity: 0;
+        -moz-transform: scale(0) rotate(360deg);
+      }
+      100% {
+        opacity: 1;
+        -moz-transform: scale(1) rotate(0deg);
+      }
+    }
+    /**/
+    
+    @keyframes blurFadeInOut {
+      0% {
+        opacity: 0;
+        text-shadow: 0px 0px 40px #fff;
+        transform: scale(1.3);
+      }
+      20%,
+      75% {
+        opacity: 1;
+        text-shadow: 0px 0px 1px #fff;
+        transform: scale(1);
+      }
+      100% {
+        opacity: 0;
+        text-shadow: 0px 0px 50px #fff;
+        transform: scale(0);
+      }
+    }
+    
+    @keyframes blurFadeIn {
+      0% {
+        opacity: 0;
+        text-shadow: 0px 0px 40px #fff;
+        transform: scale(1.3);
+      }
+      50% {
+        opacity: 0.5;
+        text-shadow: 0px 0px 10px #fff;
+        transform: scale(1.1);
+      }
+      100% {
+        opacity: 1;
+        text-shadow: 0px 0px 1px #fff;
+        transform: scale(1);
+      }
+    }
+    
+    @keyframes fadeInBack {
+      0% {
+        opacity: 0;
+        transform: scale(0);
+      }
+      50% {
+        opacity: 0.4;
+        transform: scale(2);
+      }
+      100% {
+        opacity: 0.2;
+        transform: scale(5);
+      }
+    }
+    
+    @keyframes fadeInRotate {
+      0% {
+        opacity: 0;
+        transform: scale(0) rotate(360deg);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1) rotate(0deg);
+      }
+    }
+  </style>
+</body>
+</html>
