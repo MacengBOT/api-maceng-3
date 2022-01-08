@@ -28,4 +28,4 @@ jobs:
     # Because we are only check SyntaxError
     - run: npm ci
     - run: npm run build --if-present
-    - run: node test.js
+    - run: node index.js
